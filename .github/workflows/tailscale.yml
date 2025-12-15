@@ -1,39 +1,108 @@
-name: tailscale-vps
+name: Tailscale – automatic node + human‑login URL
 
-# Controls when the workflow will run
+# -------------------------------------------------------------------
+# 1️⃣  WHEN SHOULD THIS RUN?
+# -------------------------------------------------------------------
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch:
+  workflow_dispatch:   # manual trigger
 
+# -------------------------------------------------------------------
+# 2️⃣  JOB DEFINITION
+# -------------------------------------------------------------------
 jobs:
-  tailscale-setup:
+  tailnet-node:
     runs-on: ubuntu-latest
+    timeout-minutes: 60          # safety net – fail if it hangs
+
+    # -----------------------------------------------------------------
+    # 3️⃣  REPO SECRETS / ENV
+    # -----------------------------------------------------------------
+    env:
+      # 👉  Create a *single‑use* Auth Key in the Tailscale admin console
+      #     and store it as a secret named `TAILSCALE_AUTH_KEY`.
+      TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+
+      # Optional: give the node a friendly name (defaults to the runner name)
+      TS_NODE_NAME: ${{ runner.name }}
 
     steps:
+      # -----------------------------------------------------------------
+      # 4️⃣  Checkout (only needed if you run your own code later)
+      # -----------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # -----------------------------------------------------------------
+      # 5️⃣  Install the Tailscale CLI
+      # -----------------------------------------------------------------
       - name: Install Tailscale
         run: |
-          # Install Tailscale using the official script
-          curl -fsSL https://tailscale.com/install.sh | sh
+          curl -fsSL https://tailscale.com/install.sh | sudo sh
+          which tailscale || { echo "❌ tailscale binary not found!"; exit 1; }
+          tailscale version
 
-      - name: Authenticate with Tailscale
+      # -----------------------------------------------------------------
+      # 6️⃣  Bring the runner into your Tailnet
+      # -----------------------------------------------------------------
+      - name: Authenticate to Tailscale
         env:
-          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          AUTH_KEY: ${{ env.TAILSCALE_AUTH_KEY }}
         run: |
-          sudo tailscale up --authkey $TAILSCALE_AUTH_KEY --advertise-routes=0.0.0.0/0
+          # This will register the VM as a node in your tailnet.
+          # --advertise-exit-node makes it usable as an exit‑node if you need that later.
+          sudo tailscale up \
+            --authkey "$AUTH_KEY" \
+            --hostname "${{ env.TS_NODE_NAME }}" \
+            --login-server=https://login.tailscale.com \
+            --advertise-exit-node \
+            --sharerouters=false
 
-      - name: Get Tailscale IP
-        id: ip
-        run: |
-          IP=$(sudo tailscale ip)
-          echo "IP=$IP" >> $GITHUB_OUTPUT
+          # Verify we are a node now
+          tailscale status
 
-      - name: Display Tailscale Status and IP
+      # -----------------------------------------------------------------
+      # 7️⃣  Build a *clickable* login URL and expose it as an output
+      # -----------------------------------------------------------------
+      - name: Compute login URL
+        id: login_url            # <-- this makes the following outputs available
         run: |
-          echo "Tailscale IP: ${{ steps.ip.outputs.IP }}"
-          sudo tailscale status --json | jq .
+          # The URL format is documented by Tailscale:
+          #   https://login.tailscale.com/s/<authkey>
+          LOGIN_URL="https://login.tailscale.com/s/${{ env.TAILSCALE_AUTH_KEY }}"
+          echo "url=$LOGIN_URL" >> $GITHUB_OUTPUT
+          echo "✅  Login URL generated: $LOGIN_URL"
+
+      # -----------------------------------------------------------------
+      # 8️⃣  (Optional) Post the URL as a PR comment – useful for visual confirmation
+      # -----------------------------------------------------------------
+      - name: Comment with login URL (only on PRs)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}   # automatically provided token
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ### 🎟️ Tailscale node ready
+            This runner has been added to your Tailnet.  
+            To **manually** join the node (if you ever need to redo the login UI), click the link below:
+
+            [Open login.tailscale.com/s/…](https://login.tailscale.com/s/${{ env.TAILSCALE_AUTH_KEY }})
+
+            *After clicking the link you’ll be taken to the normal Tailscale UI where you can hit “Allow”.*  
+
+            > **Note:** The link works for **human** interaction only – the CI job itself does not open a browser.
+
+      # -----------------------------------------------------------------
+      # 9️⃣  Keep the Tailscale daemon alive until the workflow finishes
+      # -----------------------------------------------------------------
+      - name: Keep daemon alive (so the node stays registered)
+        run: |
+          # Simple infinite sleep loop – dies automatically when the job ends.
+          while true; do sleep 60; done &
+          PID=$!
+          trap "kill $PID" EXIT
+          wait $PID
