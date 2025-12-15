@@ -1,86 +1,39 @@
-name: tailscale
+name: tailscale-vps
 
-# -------------------------------------------------
-# 1️⃣  WHEN SHOULD THIS RUN?
-# -------------------------------------------------
+# Controls when the workflow will run
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch:   # manual trigger
+  workflow_dispatch:
 
-# -------------------------------------------------
-# 2️⃣  JOB DEFINITION
-# -------------------------------------------------
 jobs:
-  tailscale:
+  tailscale-setup:
     runs-on: ubuntu-latest
-    timeout-minutes: 60            # safety net – fails if it hangs
-
-    # -------------------------------------------------
-    # 3️⃣  ENVIRONMENT VARIABLES
-    # -------------------------------------------------
-    env:
-      # 👉  Put your Tailscale auth key (once‑only) as a repo secret called `TAILSCALE_AUTH_KEY`
-      TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-      # Optional: give the node a friendly name (defaults to the GHA hostname)
-      TS_NODE_NAME: ${{ runner.name }}
 
     steps:
-      # -------------------------------------------------
-      # 4️⃣  CHECKOUT (optional – only needed if you run your own code)
-      # -------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # -------------------------------------------------
-      # 5️⃣  DOWNLOAD & INSTALL TAILSCALE
-      # -------------------------------------------------
       - name: Install Tailscale
         run: |
-          # Download the official installer script and pipe it to sudo sh.
-          # This pulls the latest stable CLI for the host architecture.
-          curl -fsSL https://tailscale.com/install.sh | sudo sh
+          # Install Tailscale using the official script
+          curl -fsSL https://tailscale.com/install.sh | sh
 
-          # Verify the binary is on PATH
-          which tailscale || { echo "❌ tailscale binary not found!"; exit 1; }
-
-          # Show version (nice to have for debugging)
-          tailscale version
-
-      # -------------------------------------------------
-      # 6️⃣  AUTHENTICATE WITH YOUR TAILNET
-      # -------------------------------------------------
-      - name: Authenticate to Tailscale
+      - name: Authenticate with Tailscale
         env:
-          # The auth key you generated in the Tailscale admin console.
-          # You *must* keep it secret – add it to the repo Settings → Secrets.
-          AUTH_KEY: ${{ env.TAILSCALE_AUTH_KEY }}
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          # If you already have a node cert you can reuse, you can pass it directly:
-          sudo tailscale up --authkey "$AUTH_KEY" \
-            --hostname "${{ env.TS_NODE_NAME }}" \
-            --login-server=https://login.tailscale.com \
-            --login-client-id="" \
-            --login-client-secret="" \
-            --advertise-exit-node \
-            --hostname-update=true \
-            --sharerouters=false
+          sudo tailscale up --authkey $TAILSCALE_AUTH_KEY --advertise-routes=0.0.0.0/0
 
-          # Show that we’re now a node in the tailnet
-          tailscale status
-
-      # -------------------------------------------------
-      # 7️⃣  KEEP THE RUNNER ALIVE (so the node stays up)
-      # -------------------------------------------------
-      # Tailscale runs as a daemon; we just need to keep the process alive
-      # until the job finishes (or you explicitly kill it).
-      - name: Keep Tailscale daemon alive
+      - name: Get Tailscale IP
+        id: ip
         run: |
-          # Wait forever (or until the job is cancelled)
-          while true; do sleep 60; done &
-          TAILPID=$!
-          # Forward SIGTERM/SIGINT to the sleep loop so the job can shut down cleanly
-          trap "kill $TAILPID" EXIT
-          wait $TAILPID
+          IP=$(sudo tailscale ip)
+          echo "IP=$IP" >> $GITHUB_OUTPUT
+
+      - name: Display Tailscale Status and IP
+        run: |
+          echo "Tailscale IP: ${{ steps.ip.outputs.IP }}"
+          sudo tailscale status --json | jq .
