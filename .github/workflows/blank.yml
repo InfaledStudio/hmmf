@@ -1,6 +1,5 @@
 name: vps
 
-# Controls when the workflow will run
 on:
   push:
     branches: [ "main" ]
@@ -18,3 +17,15 @@ jobs:
 
       - name: Run VPS
         run: curl -sSf https://sshx.io/get | sh -s run
+
+      # Save files created/modified during the VPS session
+      - name: Upload VPS data
+        if: always()  # run even if the VPS step fails or is cancelled
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-data
+          path: |
+            .               # everything in the workspace…
+            !.git/          # …except the git metadata
+            !**/node_modules/
+            !**/.git/
