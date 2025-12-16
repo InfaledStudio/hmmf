@@ -1,10 +1,10 @@
 name: vps
 
 on:
-  workflow_dispatch:  # run manually from the Actions tab
+  workflow_dispatch:  # you run it manually from the Actions tab
 
 permissions:
-  contents: write     # allow this workflow to push commits
+  contents: write     # needed so it can save changes back to the repo
 
 jobs:
   vps:
@@ -17,22 +17,17 @@ jobs:
           persist-credentials: true
           fetch-depth: 0
 
-      # Create a folder where you will store your data
-      - name: Create storage folder
-        run: mkdir -p "$GITHUB_WORKSPACE/storage"
-
-      - name: Run VPS (sshx)
+      - name: Start VPS (sshx)
         run: |
-          echo "When you connect, run this command:"
-          echo 'cd "$GITHUB_WORKSPACE/storage"'
+          echo "When you connect, FIRST run this command:"
+          echo 'cd "$GITHUB_WORKSPACE"'
           curl -sSf https://sshx.io/get | sh -s run
 
-      # Save (commit + push) anything you changed/created
-      - name: Commit and push changes from VPS
+      - name: Commit and push changes
         run: |
           cd "$GITHUB_WORKSPACE"
 
-          # Check if there are any changes
+          # If nothing changed, stop
           if [ -z "$(git status --porcelain)" ]; then
             echo "No changes to commit."
             exit 0
@@ -42,11 +37,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add .
-          git commit -m "Save data from VPS session [skip ci]"
+          git commit -m "Save data from VPS session [skip ci]" || exit 0
           git push
 
-      # Also upload everything as a downloadable zip
-      - name: Upload VPS data as artifact
+      - name: Upload workspace as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
