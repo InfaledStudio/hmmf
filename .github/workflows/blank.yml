@@ -1,31 +1,54 @@
 name: vps
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-  workflow_dispatch:
+  workflow_dispatch:  # run manually from the Actions tab
+
+permissions:
+  contents: write     # allow this workflow to push commits
 
 jobs:
-  build:
+  vps:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
 
-      - name: Run VPS
-        run: curl -sSf https://sshx.io/get | sh -s run
+      # Create a folder where you will store your data
+      - name: Create storage folder
+        run: mkdir -p "$GITHUB_WORKSPACE/storage"
 
-      # Save files created/modified during the VPS session
-      - name: Upload VPS data
-        if: always()  # run even if the VPS step fails or is cancelled
+      - name: Run VPS (sshx)
+        run: |
+          echo "When you connect, run this command:"
+          echo 'cd "$GITHUB_WORKSPACE/storage"'
+          curl -sSf https://sshx.io/get | sh -s run
+
+      # Save (commit + push) anything you changed/created
+      - name: Commit and push changes from VPS
+        run: |
+          cd "$GITHUB_WORKSPACE"
+
+          # Check if there are any changes
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .
+          git commit -m "Save data from VPS session [skip ci]"
+          git push
+
+      # Also upload everything as a downloadable zip
+      - name: Upload VPS data as artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: vps-data
-          path: |
-            .               # everything in the workspace…
-            !.git/          # …except the git metadata
-            !**/node_modules/
-            !**/.git/
+          path: ${{ github.workspace }}
